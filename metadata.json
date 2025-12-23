@@ -1,0 +1,5 @@
+{
+  "name": "导演剪辑版：AI 分镜大师",
+  "description": "专业的AI故事板创作工具，利用 Gemini Nano Banana (Flash Image) 生成具有一致性角色参考、风格控制和镜头设置的电影级分镜画面。",
+  "requestFramePermissions": []
+}
