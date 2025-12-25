@@ -2,6 +2,7 @@ export interface StoryboardFrame {
   id: number;
   imageUrl: string | null;
   prompt: string;
+  script: string; // Manual script/description text
   isLoading: boolean;
   settings: ShotSettings;
 }
@@ -11,17 +12,21 @@ export interface ShotSettings {
   angle: string;
   cameraPosition: string;
   focalLength: string;
-  aperture: string; // NEW
+  aperture: string;
   shotSize: string;
   lighting: string;
   aspectRatio: string;
 }
 
 export interface GlobalSettings extends ShotSettings {
-  referenceImageFront: string | null; // Base64 string
-  referenceImageSide: string | null;  // Base64 string
-  referenceImageFullBody: string | null; // Base64 string
-  referenceImageEnvironment: string | null; // Base64 string
+  referenceImageFront: string | null;
+  referenceImageSide: string | null;
+  referenceImageFullBody: string | null;
+  referenceImageEnvironment: string | null;
+  referenceImageEnvironmentMask: string | null; // NEW: Mask for Env
+  referenceImageCharacter2: string | null; // NEW: Additional Character
+  referenceImageCharacter3: string | null; // NEW: Additional Character
+  apiEndpoint: string;
 }
 
 export interface GeneratePayload {
@@ -30,7 +35,7 @@ export interface GeneratePayload {
   angle: string;
   cameraPosition: string;
   focalLength: string;
-  aperture: string; // NEW
+  aperture: string;
   shotSize: string;
   lighting: string;
   aspectRatio: string;
@@ -38,4 +43,15 @@ export interface GeneratePayload {
   referenceImageSide?: string | null;
   referenceImageFullBody?: string | null;
   referenceImageEnvironment?: string | null;
+  referenceImageEnvironmentMask?: string | null; // NEW
+  referenceImageCharacter2?: string | null; // NEW
+  referenceImageCharacter3?: string | null; // NEW
+  apiEndpoint?: string;
+}
+
+export interface EditPayload {
+  prompt: string;
+  image: string; // Base64 original image
+  maskImage: string; // Base64 mask image
+  apiEndpoint?: string;
 }

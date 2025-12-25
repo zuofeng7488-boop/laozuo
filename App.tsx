@@ -1,12 +1,22 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import StoryboardGrid from './components/StoryboardGrid';
 import PromptBar from './components/PromptBar';
 import { StoryboardFrame, GlobalSettings, ShotSettings } from './types';
 import { INITIAL_FRAMES, CINEMATIC_STYLES, LIGHTING_OPTIONS, CAMERA_ANGLES, CAMERA_POSITIONS, FOCAL_LENGTHS, SHOT_SIZES, APERTURE_OPTIONS } from './constants';
-import { generateStoryboardImage } from './services/geminiService';
+import { generateStoryboardImage, editStoryboardImage } from './services/geminiService';
+import { KeyRound, ExternalLink } from 'lucide-react';
+
+// Declaration for AI Studio window extension
+declare global {
+  interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+  }
+}
 
 const App: React.FC = () => {
+  const [hasApiKey, setHasApiKey] = useState(false);
   const [frames, setFrames] = useState<StoryboardFrame[]>(INITIAL_FRAMES);
   const [settings, setSettings] = useState<GlobalSettings>({
     style: CINEMATIC_STYLES[0],
@@ -21,19 +31,63 @@ const App: React.FC = () => {
     referenceImageSide: null,
     referenceImageFullBody: null,
     referenceImageEnvironment: null,
+    referenceImageEnvironmentMask: null,
+    referenceImageCharacter2: null,
+    referenceImageCharacter3: null,
+    apiEndpoint: "", // Initialize API endpoint
   });
   const [isGenerating, setIsGenerating] = useState(false);
+
+  // Check for API Key on mount
+  useEffect(() => {
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const has = await window.aistudio.hasSelectedApiKey();
+        setHasApiKey(has);
+      } else {
+        // Fallback for environments without the wrapper (dev)
+        setHasApiKey(true);
+      }
+    };
+    checkKey();
+  }, []);
+
+  const handleSelectKey = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      // Assume success after dialog interaction to mitigate race condition
+      setHasApiKey(true);
+    }
+  };
+
+  const handleApiError = async (error: any) => {
+    console.error("API Error caught in App:", error);
+    const msg = error.message || error.toString();
+    if (msg.includes("Requested entity was not found")) {
+      // API Key issue or project issue
+      setHasApiKey(false);
+      if (window.aistudio) {
+         await window.aistudio.openSelectKey();
+         setHasApiKey(true);
+      }
+      alert("API Key 验证失效，请重新选择有效的付费项目 API Key。");
+    } else {
+      alert("生成失败 (Generation Failed): " + msg);
+    }
+  };
 
   // Helper to update global settings
   const handleUpdateSettings = (key: keyof GlobalSettings, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleClearReference = (type: 'front' | 'side' | 'fullbody' | 'env') => {
+  const handleClearReference = (type: 'front' | 'side' | 'fullbody' | 'env' | 'char2' | 'char3') => {
     if (type === 'front') setSettings(prev => ({ ...prev, referenceImageFront: null }));
     if (type === 'side') setSettings(prev => ({ ...prev, referenceImageSide: null }));
     if (type === 'fullbody') setSettings(prev => ({ ...prev, referenceImageFullBody: null }));
-    if (type === 'env') setSettings(prev => ({ ...prev, referenceImageEnvironment: null }));
+    if (type === 'env') setSettings(prev => ({ ...prev, referenceImageEnvironment: null, referenceImageEnvironmentMask: null }));
+    if (type === 'char2') setSettings(prev => ({ ...prev, referenceImageCharacter2: null }));
+    if (type === 'char3') setSettings(prev => ({ ...prev, referenceImageCharacter3: null }));
   };
 
   // Find the first empty slot to fill
@@ -58,115 +112,261 @@ const App: React.FC = () => {
       <!DOCTYPE html>
       <html>
       <head>
-        <title>导演分镜表 Export</title>
+        <title>Shooting Script / Storyboard Export</title>
         <style>
-          @page { margin: 0; size: A4; }
-          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 40px; color: #1a1a1a; max-width: 210mm; margin: 0 auto; }
-          .frame-container { 
-            display: flex; 
-            border: 1px solid #e5e5e5; 
-            margin-bottom: 25px; 
-            page-break-inside: avoid;
-            background: #fff;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-          }
-          .frame-image { 
-            width: 55%; 
-            background: #000;
-            display: flex; 
-            align-items: center; 
-            justify-content: center; 
-            min-height: 250px;
-          }
-          .frame-image img { 
-            width: 100%; 
-            height: 100%;
-            object-fit: contain; 
-          }
-          .frame-details { 
-            width: 45%; 
-            padding: 25px; 
-            font-size: 12px;
-            display: flex;
-            flex-direction: column;
-          }
-          h2 { margin-top: 0; margin-bottom: 15px; border-bottom: 3px solid #f59e0b; padding-bottom: 8px; color: #1a1a1a; font-size: 18px; display: flex; justify-content: space-between; align-items: baseline; }
-          .shot-id { color: #f59e0b; font-weight: 800; }
-          .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
-          .meta-item { border-bottom: 1px solid #f0f0f0; padding-bottom: 4px; }
-          .meta-label { font-weight: 700; color: #888; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
-          .meta-value { color: #111; font-weight: 500; font-size: 11px; }
-          .prompt-box { background: #fcfaf5; padding: 12px; border-radius: 6px; border-left: 3px solid #f59e0b; flex-grow: 1; }
-          .prompt-label { font-weight: 700; margin-bottom: 6px; display: block; color: #d97706; font-size: 10px; uppercase; }
-          .prompt-text { line-height: 1.5; color: #333; font-style: italic; }
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Courier+Prime&display=swap');
           
-          /* Print optimizations */
-          @media print {
-            body { -webkit-print-color-adjust: exact; padding: 20px; }
-            .frame-container { break-inside: avoid; box-shadow: none; border: 1px solid #ddd; }
+          @page { size: A4; margin: 10mm; }
+          body { 
+            font-family: 'Inter', system-ui, sans-serif; 
+            color: #111; 
+            line-height: 1.4; 
+            -webkit-print-color-adjust: exact; 
+            print-color-adjust: exact;
+            background: #fff;
+          }
+          
+          .header { 
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            border-bottom: 4px solid #000; 
+            padding-bottom: 15px; 
+            margin-bottom: 25px; 
+          }
+          .title-block h1 { 
+            font-size: 28px; 
+            font-weight: 900; 
+            letter-spacing: 1px; 
+            text-transform: uppercase; 
+            margin: 0; 
+            line-height: 1;
+          }
+          .title-block p {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-top: 5px;
+            color: #666;
+          }
+          .meta-block {
+            text-align: right;
+            font-size: 10px;
+            font-family: 'Courier Prime', monospace;
+          }
+
+          .shot-table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            border: 2px solid #000; 
+          }
+          
+          /* Table Header */
+          .thead th { 
+            background: #000; 
+            color: #fff; 
+            font-size: 10px; 
+            text-transform: uppercase; 
+            font-weight: bold; 
+            padding: 8px;
+            text-align: left;
+            border: 1px solid #000;
+          }
+          
+          /* Rows */
+          .tr { 
+            page-break-inside: avoid; 
+            border-bottom: 1px solid #000; 
+          }
+          .td { 
+            padding: 0; 
+            border: 1px solid #000; 
+            vertical-align: top; 
+          }
+          
+          /* --- Columns --- */
+          
+          /* 1. Shot Number */
+          .col-shot { 
+            width: 50px; 
+            background: #f4f4f4; 
+            text-align: center;
+            vertical-align: middle;
+          }
+          .shot-num { 
+            font-size: 24px; 
+            font-weight: 900; 
+            color: #000;
+          }
+          
+          /* 2. Visual */
+          .col-visual { 
+            width: 38%; 
+            padding: 5px;
+          }
+          .frame-img { 
+            width: 100%; 
+            display: block; 
+            height: auto; 
+            border: 1px solid #eee;
+          }
+          
+          /* 3. Script / Action */
+          .col-script { 
+            width: 37%; 
+            padding: 12px;
+          }
+          .script-content {
+             font-family: 'Courier Prime', 'Courier New', monospace;
+             font-size: 11px;
+             line-height: 1.5;
+             white-space: pre-wrap;
+          }
+          .prompt-hint {
+             display: block;
+             margin-top: 8px;
+             padding-top: 8px;
+             border-top: 1px dashed #ccc;
+             font-size: 9px;
+             color: #888;
+             font-family: sans-serif;
+             font-style: italic;
+          }
+
+          /* 4. Technical Specs */
+          .col-tech { 
+            width: 20%; 
+            background: #fff;
+            padding: 8px;
+          }
+          .tech-grid {
+             display: grid;
+             gap: 6px;
+          }
+          .tech-item {
+             border-bottom: 1px solid #eee;
+             padding-bottom: 2px;
+          }
+          .tech-label { 
+             display: block; 
+             font-weight: 800; 
+             font-size: 7px; 
+             color: #888; 
+             text-transform: uppercase; 
+             margin-bottom: 1px;
+          }
+          .tech-value {
+             font-size: 9px;
+             font-weight: 600;
+             color: #000;
+          }
+          
+          .footer { 
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            padding-top: 10px;
+            font-size: 9px; 
+            text-align: center; 
+            color: #888; 
+            border-top: 1px solid #000; 
+          }
+          
+          /* Hide footer on screen, show on print if needed, but fixed positioning is tricky in print. 
+             Let's use a static footer at the end of list */
+          .static-footer {
+             margin-top: 30px;
+             text-align: center;
+             font-size: 9px;
+             color: #aaa;
+             text-transform: uppercase;
+             letter-spacing: 2px;
           }
         </style>
       </head>
       <body>
-        <h1 style="text-align: center; margin-bottom: 10px; font-size: 24px;">导演分镜脚本</h1>
-        <p style="text-align: center; color: #666; font-size: 12px; margin-bottom: 40px; text-transform: uppercase; letter-spacing: 1px;">Director's Storyboard Generated by Gemini AI</p>
-        
-        ${validFrames.map((frame, index) => `
-          <div class="frame-container">
-            <div class="frame-image">
-              <img src="${frame.imageUrl}" />
-            </div>
-            <div class="frame-details">
-              <h2><span class="shot-id">SHOT ${index + 1}</span></h2>
-              
-              <div class="meta-grid">
-                <div class="meta-item">
-                  <div class="meta-label">镜头角度 (Angle)</div>
-                  <div class="meta-value">${frame.settings.angle.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">景别 (Shot Size)</div>
-                  <div class="meta-value">${frame.settings.shotSize.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">机位 (Position)</div>
-                  <div class="meta-value">${frame.settings.cameraPosition.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">焦距 (Lens)</div>
-                  <div class="meta-value">${frame.settings.focalLength.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">光圈 (Aperture)</div>
-                  <div class="meta-value">${frame.settings.aperture.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">光影 (Lighting)</div>
-                  <div class="meta-value">${frame.settings.lighting.split('(')[0]}</div>
-                </div>
-                <div class="meta-item">
-                  <div class="meta-label">画幅 (Ratio)</div>
-                  <div class="meta-value">${frame.settings.aspectRatio}</div>
-                </div>
-              </div>
-              
-              <div class="prompt-box">
-                <span class="prompt-label">SCENE DESCRIPTION</span>
-                <div class="prompt-text">${frame.prompt}</div>
-              </div>
-            </div>
+        <div class="header">
+          <div class="title-block">
+            <h1>Shooting Script</h1>
+            <p>Visual Storyboard & Production List</p>
           </div>
-        `).join('')}
+          <div class="meta-block">
+            <div>DATE: ${new Date().toLocaleDateString()}</div>
+            <div>PROJECT ID: ${Math.random().toString(36).substr(2, 6).toUpperCase()}</div>
+            <div>UNIT: MAIN</div>
+          </div>
+        </div>
 
+        <table class="shot-table">
+          <thead>
+            <tr class="thead">
+              <th style="width: 50px; text-align: center;">#</th>
+              <th>Visual</th>
+              <th>Action / Dialogue</th>
+              <th>Camera / Tech</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${validFrames.map((frame, index) => `
+              <tr class="tr">
+                <!-- Shot ID -->
+                <td class="td col-shot">
+                  <div class="shot-num">${index + 1}</div>
+                </td>
+                
+                <!-- Visual -->
+                <td class="td col-visual">
+                  <img class="frame-img" src="${frame.imageUrl}" />
+                </td>
+                
+                <!-- Script -->
+                <td class="td col-script">
+                  <div class="script-content">${frame.script || "(No script description provided)"}</div>
+                  ${frame.prompt ? `<div class="prompt-hint">Visual Prompt: ${frame.prompt}</div>` : ''}
+                </td>
+                
+                <!-- Tech Specs -->
+                <td class="td col-tech">
+                   <div class="tech-grid">
+                      <div class="tech-item">
+                        <span class="tech-label">Shot Size</span>
+                        <div class="tech-value">${frame.settings.shotSize.split('(')[0]}</div>
+                      </div>
+                      <div class="tech-item">
+                        <span class="tech-label">Angle</span>
+                        <div class="tech-value">${frame.settings.angle.split('(')[0]}</div>
+                      </div>
+                      <div class="tech-item">
+                        <span class="tech-label">Position</span>
+                        <div class="tech-value">${frame.settings.cameraPosition.split('(')[0]}</div>
+                      </div>
+                      <div class="tech-item">
+                        <span class="tech-label">Lens</span>
+                        <div class="tech-value">${frame.settings.focalLength.split('(')[0]}</div>
+                      </div>
+                      <div class="tech-item">
+                        <span class="tech-label">Aperture</span>
+                        <div class="tech-value">${frame.settings.aperture.split('(')[0]}</div>
+                      </div>
+                      <div class="tech-item">
+                        <span class="tech-label">Lighting</span>
+                        <div class="tech-value">${frame.settings.lighting.split('(')[0]}</div>
+                      </div>
+                   </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        
+        <div class="static-footer">
+          Generated by Gemini Director's Cut • Page 1 of 1
+        </div>
+        
         <script>
-          // Automatically trigger print when images are likely loaded (simple delay or onload)
-          window.onload = () => {
-            setTimeout(() => {
-              window.print();
-            }, 500);
-          }
+            window.onload = () => { setTimeout(() => window.print(), 800); }
         </script>
       </body>
       </html>
@@ -195,7 +395,11 @@ const App: React.FC = () => {
         referenceImageFront: settings.referenceImageFront,
         referenceImageSide: settings.referenceImageSide,
         referenceImageFullBody: settings.referenceImageFullBody,
-        referenceImageEnvironment: settings.referenceImageEnvironment
+        referenceImageEnvironment: settings.referenceImageEnvironment,
+        referenceImageEnvironmentMask: settings.referenceImageEnvironmentMask,
+        referenceImageCharacter2: settings.referenceImageCharacter2,
+        referenceImageCharacter3: settings.referenceImageCharacter3,
+        apiEndpoint: settings.apiEndpoint, 
       });
 
       setFrames(prev => prev.map(f => 
@@ -207,9 +411,8 @@ const App: React.FC = () => {
         } : f
       ));
     } catch (error) {
-      console.error("Single generation failed", error);
-      alert("生成失败，请重试。");
       setFrames(prev => prev.map(f => f.id === id ? { ...f, isLoading: false } : f));
+      await handleApiError(error);
     } finally {
       setIsGenerating(false);
     }
@@ -221,12 +424,11 @@ const App: React.FC = () => {
     if (!frame) return;
 
     setIsGenerating(true);
-    // Optimistic update
     setFrames(prev => prev.map(f => f.id === id ? { 
       ...f, 
       isLoading: true, 
       prompt: newPrompt,
-      settings: newSettings // Update local settings immediately to show intent
+      settings: newSettings 
     } : f));
 
     try {
@@ -242,8 +444,12 @@ const App: React.FC = () => {
         aspectRatio: newSettings.aspectRatio,
         referenceImageFront: settings.referenceImageFront,
         referenceImageSide: settings.referenceImageSide,
-        referenceImageFullBody: settings.referenceImageFullBody, // Use global full body ref
-        referenceImageEnvironment: settings.referenceImageEnvironment
+        referenceImageFullBody: settings.referenceImageFullBody,
+        referenceImageEnvironment: settings.referenceImageEnvironment,
+        referenceImageEnvironmentMask: settings.referenceImageEnvironmentMask,
+        referenceImageCharacter2: settings.referenceImageCharacter2,
+        referenceImageCharacter3: settings.referenceImageCharacter3,
+        apiEndpoint: settings.apiEndpoint,
       });
 
       setFrames(prev => prev.map(f => 
@@ -255,13 +461,50 @@ const App: React.FC = () => {
         } : f
       ));
     } catch (error) {
-      console.error("Re-shoot failed", error);
-      alert("重拍失败，请重试。");
       setFrames(prev => prev.map(f => f.id === id ? { ...f, isLoading: false } : f));
+      await handleApiError(error);
     } finally {
       setIsGenerating(false);
     }
   }
+
+  // Handle inpainting / mask editing
+  const handleEdit = async (id: number, prompt: string, maskImage: string) => {
+    const frame = frames.find(f => f.id === id);
+    if (!frame || !frame.imageUrl) return;
+
+    setIsGenerating(true);
+    setFrames(prev => prev.map(f => f.id === id ? { 
+        ...f, 
+        isLoading: true 
+    } : f));
+
+    try {
+        const newImageUrl = await editStoryboardImage({
+            prompt: prompt,
+            image: frame.imageUrl,
+            maskImage: maskImage,
+            apiEndpoint: settings.apiEndpoint
+        });
+
+        setFrames(prev => prev.map(f => f.id === id ? { 
+            ...f, 
+            imageUrl: newImageUrl, 
+            isLoading: false 
+        } : f));
+
+    } catch (error) {
+        setFrames(prev => prev.map(f => f.id === id ? { ...f, isLoading: false } : f));
+        await handleApiError(error);
+    } finally {
+        setIsGenerating(false);
+    }
+  };
+
+  // Handle script text updates
+  const handleUpdateScript = (id: number, script: string) => {
+    setFrames(prev => prev.map(f => f.id === id ? { ...f, script } : f));
+  };
 
   // Handle batch generation from the PromptBar
   const handleBatchGenerate = async (prompts: string[]) => {
@@ -307,7 +550,11 @@ const App: React.FC = () => {
             referenceImageFront: settings.referenceImageFront,
             referenceImageSide: settings.referenceImageSide,
             referenceImageFullBody: settings.referenceImageFullBody,
-            referenceImageEnvironment: settings.referenceImageEnvironment
+            referenceImageEnvironment: settings.referenceImageEnvironment,
+            referenceImageEnvironmentMask: settings.referenceImageEnvironmentMask,
+            referenceImageCharacter2: settings.referenceImageCharacter2,
+            referenceImageCharacter3: settings.referenceImageCharacter3,
+            apiEndpoint: settings.apiEndpoint,
           });
 
           setFrames(prev => prev.map(f => 
@@ -320,12 +567,16 @@ const App: React.FC = () => {
           ));
         } catch (error) {
           console.error(`Generation failed for frame ${task.id}`, error);
-          // Revert specific frame error
           setFrames(prev => prev.map(f => f.id === task.id ? { ...f, isLoading: false } : f));
+          
+          const msg = (error as any).message || "";
+          if (msg.includes("Requested entity was not found")) {
+             throw error; 
+          }
         }
       }));
     } catch (globalError) {
-      console.error("Batch process error", globalError);
+      await handleApiError(globalError);
     } finally {
       setIsGenerating(false);
     }
@@ -339,9 +590,53 @@ const App: React.FC = () => {
 
   const handleClearFrame = (id: number) => {
     setFrames(prev => prev.map(f => 
-      f.id === id ? { ...f, imageUrl: null, prompt: "", isLoading: false } : f
+      f.id === id ? { ...f, imageUrl: null, prompt: "", script: "", isLoading: false } : f
     ));
   };
+
+  if (!hasApiKey) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen w-full bg-neutral-950 text-neutral-100 p-8">
+        <div className="max-w-md w-full text-center space-y-8">
+           <div className="flex justify-center mb-6">
+              <div className="w-20 h-20 bg-amber-500/10 rounded-2xl flex items-center justify-center border border-amber-500/30">
+                 <KeyRound size={40} className="text-amber-500" />
+              </div>
+           </div>
+           
+           <div>
+             <h1 className="text-3xl font-bold mb-2">Connect Google Cloud</h1>
+             <p className="text-neutral-400">
+               您正在使用 Nano Banana (Gemini 2.5 Flash)。请连接您的 API Key 以开始使用。
+             </p>
+           </div>
+
+           <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 text-left text-xs text-neutral-400">
+              <p className="mb-2 font-semibold text-neutral-300">为什么需要连接？</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>访问 Gemini 2.5 Flash 高速图像生成模型</li>
+                <li>快速生成分镜画面</li>
+              </ul>
+              <a 
+                href="https://ai.google.dev/gemini-api/docs/billing" 
+                target="_blank" 
+                rel="noreferrer"
+                className="mt-4 flex items-center gap-1 text-amber-500 hover:underline"
+              >
+                了解计费信息 <ExternalLink size={10} />
+              </a>
+           </div>
+
+           <button 
+             onClick={handleSelectKey}
+             className="w-full py-3 bg-amber-500 hover:bg-amber-400 text-black font-bold rounded-lg transition-all transform active:scale-95 shadow-lg shadow-amber-500/20"
+           >
+             选择项目并连接
+           </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-full bg-neutral-950 text-neutral-100 overflow-hidden font-sans selection:bg-amber-500/30">
@@ -361,6 +656,8 @@ const App: React.FC = () => {
           frames={frames}
           onRegenerate={handleRegenerate}
           onReShoot={handleReShoot}
+          onEdit={handleEdit} // New prop
+          onUpdateScript={handleUpdateScript} // New prop
           onClear={handleClearFrame}
         />
 

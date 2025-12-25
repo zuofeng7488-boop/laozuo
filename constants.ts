@@ -89,6 +89,7 @@ export const INITIAL_FRAMES = Array.from({ length: 9 }, (_, i) => ({
   id: i,
   imageUrl: null,
   prompt: "",
+  script: "", // Initialize empty script
   isLoading: false,
   settings: {
     style: CINEMATIC_STYLES[0],
